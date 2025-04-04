@@ -1,26 +1,6 @@
-from aiohttp import JsonPayload
-import docker
-import time
-import configparser
-import os
-from pathlib import Path
-import json
+import time, requests, configparser, socket, os, docker, json
 
-def loadConfig(config_path='agent.conf'):
-    """
-    Функция для загрузки конфигурации из файла
-    
-    Параметры:
-    config_path (str): путь к файлу конфигурации
-    
-    Возвращает:
-    dict: словарь с настройками
-    """
-    
-    # Проверяем существование файла
-    if not Path(config_path).is_file():
-        raise FileNotFoundError(f"Файл конфигурации {config_path} не найден")
-    
+def loadConfig(config_path):
     # Создаем объект конфигурации
     config = configparser.ConfigParser()
     
@@ -41,15 +21,23 @@ def loadConfig(config_path='agent.conf'):
         raise ValueError(f"Ошибка при чтении конфигурации: {e}")
 # Функция получающая имя машины
 def getHostInfo():
-    """
-    Получает информацию о хостовой системе.
-    
-    Возвращает:
-    list: Список словарей с информацией о хостовой системе
-    """
-    information = []
-    information += [{'hostname': os.uname().nodename}]
+    information = [{'hostname': os.uname().nodename, 'IPAddress': getLocalIP()}]
     return json.dumps(information)
+
+def getLocalIP():
+    try:
+        # Создаем временное соединение к публичному DNS
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # Google Public DNS
+        localIP = s.getsockname()[0]
+        s.close()
+        return localIP
+    except Exception:
+        try:
+            # Альтернативный способ
+            return socket.gethostbyname(socket.gethostname())
+        except:
+            return "127.0.0.1"  # Возвращаем localhost если другие методы не сработали
 
 # Получаем список контейнеров
 def getContainers():
@@ -65,6 +53,7 @@ def getContainers():
                 'id' : container.id,
                 'name': container.name,
                 'hostname': os.uname().nodename,
+                
             })
         return json.dumps(containerList)
     except docker.errors.APIError as e:
@@ -76,12 +65,6 @@ def getContainers():
     
 # Получаем список сетей
 def getNetList():
-    """
-    Получает список сетей, к которым подключены контейнеры.
-    
-    Возвращает:
-    list: Список словарей с информацией о сетях
-    """
     client = docker.DockerClient(base_url="unix://var/run/docker.sock")
     try:
         networks = client.networks.list()
@@ -101,12 +84,6 @@ def getNetList():
 
 # Получаем подключения между контейнерами
 def getNetConnection():
-    """
-    Получает список сетей и ID контейнеров подключенных к ним.
-    
-    Возвращает:
-    list: Список словарей с информацией о сетях и контейнерах
-    """
     client = docker.DockerClient(base_url="unix://var/run/docker.sock")
     try:
         # Получаем список всех контейнеров (включая остановленные)
@@ -134,16 +111,30 @@ def getNetConnection():
 if __name__ == '__main__':
     # Загружаем конфигурацию
     config = loadConfig('/etc/DockerNetAgent/agent.conf')
+    regUrl = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/agents/checkRegistration/"
+    authToken = [{"authToken": config['global']['authtoken']}]
+    print(json.dumps(authToken))
+    regReq = requests.post(regUrl, data=json.dumps(authToken))
+    # Проверяем результат регистрации
+    if regReq.status_code != 200:
+        print('Не удалось авторизоваться на сервере')
+        exit()
     # Запускаем главный цикл программы
     while True:
-        # Отправляем на сервер данные о сетях
-        os.system(f"curl -X POST http://{config['global']['server']}:{config['global']['port']}/api/v1/netinfo/sendNetList/ -H 'Content-Type: application/json' -d '{getNetList()}'")
-        # Отправляем на сервер данные о виртуальной машине
-        os.system(f"curl -X POST http://{config['global']['server']}:{config['global']['port']}/api/v1/hosts/sendHostInfo/ -H 'Content-Type: application/json' -d '{getHostInfo()}'")
+        headers = f"{'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}"
+        url1 = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/netinfo/sendNetList/"
+        url2 = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/hosts/sendHostInfo/"
+        url3 = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/containers/sendContList/"
+        url4 = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/netinfo/sendNetConnection/"
+        # Отправляем на сервер список сетей
+        req1 = requests.post(url1, data=getNetList(), headers=headers)
+        # Отправляем на сервер данные о хосте
+        req2 = requests.post(url2, data=getHostInfo(), headers=headers)
         # Отправляем на сервер данные о контейнерах
-        os.system(f"curl -X POST http://{config['global']['server']}:{config['global']['port']}/api/v1/containers/sendContList/ -H 'Content-Type: application/json' -d '{getContainers()}'")
-        # Отправляем на сервер данные о сетях
-        os.system(f"curl -X POST http://{config['global']['server']}:{config['global']['port']}/api/v1/netinfo/sendNetConnection/ -H 'Content-Type: application/json' -d '{getNetConnection()}'")
+        req3 = requests.post(url3, data=getContainers(), headers=headers)
+        # Отправляем на сервер данные о подключениях
+        req4 = requests.post(url4, data=getNetConnection(), headers=headers)
+        # Очищаем память
+        del url1, url2, url3, url4, headers, regReq, regUrl, req1, req2, req3, req4
         # Задержка перед отправкой данных
         time.sleep(int(config['global']['sendinterval']))
-        
