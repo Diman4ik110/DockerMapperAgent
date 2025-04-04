@@ -113,7 +113,7 @@ if __name__ == '__main__':
     config = loadConfig('/etc/DockerNetAgent/agent.conf')
     regUrl = f"http://{config['global']['server']}:{config['global']['port']}/api/v1/agents/checkRegistration/"
     authToken = [{"authToken": config['global']['authtoken']}]
-    print(json.dumps(authToken))
+    print()
     regReq = requests.post(regUrl, data=json.dumps(authToken))
     # Проверяем результат регистрации
     if regReq.status_code != 200:
