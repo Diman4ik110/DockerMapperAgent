@@ -1,5 +1,5 @@
 from agent.core import Agent
-from agent.config import Config
+from agent.config import *
 import logging
 import asyncio
 
@@ -17,9 +17,14 @@ async def main():
 
         # Инициализация агента
         agent = Agent(config)
-
-        # Запуск агента
-        await agent.run()
+        if (agent.config['global']['authtoken'] != ""):
+            if (await agent.chechRegister()):
+                await agent.run()
+        else:
+            await agent.register()
+            # Запуск агента
+            await agent.run()
+            
     except Exception as e:
         logging.error(f"Ошибка при выполнении агента: {e}")
 

@@ -1,20 +1,34 @@
-import asyncio
-import socket
+from scapy.all import sniff, IP, TCP, UDP
+import docker
 
-# async def getLocalIP():
-#     try:
-#         # Асинхронное создание TCP-соединения для определения локального IP
-#         reader, writer = await asyncio.open_connection('8.8.8.8', 80)
-#         local_ip = writer.get_extra_info('sockname')[0]
-#         writer.close()
-#         await writer.wait_closed()
-#         return local_ip
-#     except Exception:
-#         try:
-#             # Асинхронное разрешение DNS через цикл событий
-#             loop = asyncio.get_running_loop()
-#             hostname = await loop.run_in_executor(None, socket.gethostname)
-#             local_ip = await loop.run_in_executor(None, socket.gethostbyname, hostname)
-#             return local_ip
-#         except Exception:
-#             return "127.0.0.1"
+# Получаем IP контейнеров
+def get_container_ips():
+    client = docker.from_env()
+    containers = client.containers.list()
+    return [c.attrs['NetworkSettings']['IPAddress'] for c in containers]
+
+# Фильтрация трафика между контейнерами
+def process_packet(packet):
+    if IP in packet:
+        src_ip = packet[IP].src
+        dst_ip = packet[IP].dst
+        proto = "TCP" if TCP in packet else "UDP" if UDP in packet else "Other"
+        print(f"[+] {proto} {src_ip} -> {dst_ip}")
+
+# Основная функция
+if __name__ == "__main__":
+    container_ips = get_container_ips()
+    print(f"IP контейнеров: {container_ips}")
+    
+    # Фильтр: только трафик между контейнерами
+    sniff(
+        iface="docker0",
+        filter="ip",
+        lfilter=lambda pkt: (
+            IP in pkt and
+            pkt[IP].src in container_ips and
+            pkt[IP].dst in container_ips
+        ),
+        prn=process_packet,
+        count=0
+    )
